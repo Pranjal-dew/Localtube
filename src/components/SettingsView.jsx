@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, RefreshCw, MessageSquare, HardDrive, Sliders, ShieldCheck, Check, Sparkles, FolderDown } from 'lucide-react';
+import { Settings as SettingsIcon, Save, RefreshCw, MessageSquare, HardDrive, Sliders, ShieldCheck, Check, Sparkles, FolderDown, RotateCcw, Trash2, Video } from 'lucide-react';
 import { db } from '../services/db';
 
 export default function SettingsView({ onSettingsSaved }) {

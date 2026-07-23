@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Search, FolderHeart, History, Youtube, HardDrive, Plus, Sparkles, Settings, ListVideo } from 'lucide-react';
+import { Download, Search, FolderHeart, History, Youtube, HardDrive, Plus, Sparkles, Settings, ListVideo, Trash2, Users } from 'lucide-react';
 import { downloader } from '../services/downloader';
 
 export default function Navbar({ 
@@ -7,6 +7,7 @@ export default function Navbar({
   onOpenSearch, 
   onOpenCollections, 
   onOpenHistory,
+  onOpenCreators,
   activeTab,
   setActiveTab 
 }) {
@@ -22,7 +23,7 @@ export default function Navbar({
   return (
     <header className="sticky top-0 z-30 bg-[#0f0f0f]/95 backdrop-blur-md border-b border-[#272727] px-4 py-2.5 flex items-center justify-between">
       {/* Brand & Logo */}
-      <div className="flex items-center space-x-6">
+      <div className="flex items-center space-x-3">
         <button 
           onClick={() => {
             setActiveTab('collections');
@@ -44,6 +45,21 @@ export default function Navbar({
           </div>
         </button>
 
+        {/* Downloader Trigger - Placed directly right to logo */}
+        <button
+          onClick={onOpenDownload}
+          className="relative bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all shadow-md shadow-red-600/20 active:scale-95 shrink-0"
+          title="Add YouTube Video or Playlist URL"
+        >
+          <Plus className="w-4 h-4" />
+          <span>Add</span>
+          {downloadCount > 0 && (
+            <span className="absolute -top-1 -right-1 bg-yellow-400 text-black text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center animate-pulse">
+              {downloadCount}
+            </span>
+          )}
+        </button>
+
         {/* Primary View Tabs */}
         <nav className="hidden md:flex items-center space-x-1 bg-[#1f1f1f] p-1 rounded-lg border border-[#272727]">
           <button
@@ -57,6 +73,19 @@ export default function Navbar({
           >
             <FolderHeart className="w-3.5 h-3.5 text-red-500" />
             <span>Home</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab('creators');
+              if (onOpenCreators) onOpenCreators();
+            }}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center space-x-1.5 ${
+              activeTab === 'creators' ? 'bg-[#272727] text-white shadow-sm' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5 text-amber-400" />
+            <span>Creators</span>
           </button>
 
           <button
@@ -108,7 +137,20 @@ export default function Navbar({
       </div>
 
       {/* Action Buttons */}
-      <div className="flex items-center space-x-3">
+      <div className="flex items-center space-x-2">
+        {/* Recycle Bin Button - directly left of Settings */}
+        <button
+          onClick={() => setActiveTab('bin')}
+          className={`p-2 rounded-full border transition-all ${
+            activeTab === 'bin'
+              ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-400'
+              : 'bg-[#1f1f1f] hover:bg-[#252525] border-[#272727] text-gray-400 hover:text-white'
+          }`}
+          title="Recycle Bin (Deleted Notes)"
+        >
+          <Trash2 className="w-4 h-4 text-yellow-400" />
+        </button>
+
         {/* Settings Button */}
         <button
           onClick={() => setActiveTab('settings')}
@@ -120,20 +162,6 @@ export default function Navbar({
           title="Settings & Preferences"
         >
           <Settings className="w-4 h-4" />
-        </button>
-
-        {/* Downloader Trigger */}
-        <button
-          onClick={onOpenDownload}
-          className="relative bg-red-600 hover:bg-red-700 text-white px-3.5 py-2 rounded-full text-xs font-semibold flex items-center space-x-2 transition-all shadow-md shadow-red-600/20 active:scale-95"
-        >
-          <Plus className="w-4 h-4" />
-          <span className="hidden sm:inline">Paste YouTube URL</span>
-          {downloadCount > 0 && (
-            <span className="absolute -top-1 -right-1 bg-yellow-400 text-black text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center animate-pulse">
-              {downloadCount}
-            </span>
-          )}
         </button>
       </div>
     </header>

@@ -1,12 +1,48 @@
 import React, { useState } from 'react';
-import { MessageSquare, FileText, User } from 'lucide-react';
+import { MessageSquare, FileText } from 'lucide-react';
+
+// Helper to parse valid positive seconds from comment object
+const parseToSeconds = (comment) => {
+  if (comment.timestamp_sec !== null && comment.timestamp_sec !== undefined) {
+    if (typeof comment.timestamp_sec === 'number' && !isNaN(comment.timestamp_sec) && comment.timestamp_sec > 0) {
+      return comment.timestamp_sec;
+    }
+    if (typeof comment.timestamp_sec === 'string') {
+      const p = parseInt(comment.timestamp_sec, 10);
+      if (!isNaN(p) && p > 0) return p;
+    }
+  }
+
+  // Fallback: Extract timestamp from comment text if present (e.g. "Check 1:30")
+  if (comment.content) {
+    const match = /\b(?:(\d+):)?([0-5]?\d):([0-5]\d)\b/.exec(comment.content);
+    if (match) {
+      let sec = 0;
+      if (match[1]) {
+        sec = parseInt(match[1], 10) * 3600 + parseInt(match[2], 10) * 60 + parseInt(match[3], 10);
+      } else {
+        sec = parseInt(match[2], 10) * 60 + parseInt(match[3], 10);
+      }
+      if (sec > 0) return sec;
+    }
+  }
+  return null;
+};
 
 export default function TimelineMarkers({ comments, duration, onSeek }) {
   const [hoveredComment, setHoveredComment] = useState(null);
 
-  const timestampComments = comments.filter(c => c.timestamp_sec !== null && c.timestamp_sec !== undefined && !isNaN(c.timestamp_sec));
+  if (!comments || comments.length === 0 || !duration || duration <= 0) {
+    return null;
+  }
 
-  if (!duration || duration <= 0 || timestampComments.length === 0) {
+  // Map comments to list of items with valid timestamp seconds > 0
+  const timestampItems = comments.map(c => ({
+    comment: c,
+    sec: parseToSeconds(c)
+  })).filter(item => item.sec !== null && item.sec > 0);
+
+  if (timestampItems.length === 0) {
     return null;
   }
 
@@ -18,27 +54,26 @@ export default function TimelineMarkers({ comments, duration, onSeek }) {
   };
 
   return (
-    <div className="absolute inset-x-0 bottom-0 top-0 pointer-events-none z-20">
-      {timestampComments.map((comment) => {
-        const timeSec = comment.timestamp_sec;
-        const leftPercent = Math.min(100, Math.max(0, (timeSec / duration) * 100));
-        const isLocal = comment.is_local === 1;
+    <div className="absolute inset-x-0 bottom-0 top-0 pointer-events-none z-30">
+      {timestampItems.map(({ comment, sec }) => {
+        const leftPercent = Math.min(100, Math.max(0, (sec / duration) * 100));
+        const isLocal = comment.is_local === 1 || comment.is_local === '1';
 
         return (
           <div
             key={comment.id}
-            className="absolute top-0 bottom-0 -translate-x-1/2 pointer-events-auto group cursor-pointer flex items-center justify-center"
+            className="absolute top-0 bottom-0 -translate-x-1/2 pointer-events-auto group cursor-pointer flex items-center justify-center z-30"
             style={{ left: `${leftPercent}%` }}
             onClick={(e) => {
               e.stopPropagation();
-              onSeek(timeSec);
+              onSeek(sec);
             }}
             onMouseEnter={() => setHoveredComment(comment)}
             onMouseLeave={() => setHoveredComment(null)}
           >
-            {/* Ultra-thin Vertical Line Tick Marker */}
+            {/* Vertical Line Tick Marker */}
             <div 
-              className={`w-[1.5px] h-full rounded-full transition-all group-hover:w-[2.5px] ${
+              className={`w-[2px] h-full transition-all group-hover:w-[3px] ${
                 isLocal 
                   ? 'bg-yellow-400' 
                   : 'bg-emerald-400'
@@ -62,7 +97,7 @@ export default function TimelineMarkers({ comments, duration, onSeek }) {
                     </span>
                   </div>
                   <span className="text-[10px] font-mono font-bold bg-[#272727] text-gray-300 px-1.5 py-0.5 rounded">
-                    {formatTime(timeSec)}
+                    {formatTime(sec)}
                   </span>
                 </div>
 

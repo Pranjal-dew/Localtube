@@ -7,11 +7,13 @@ A privacy-focused, offline-first YouTube video manager, downloader, and interact
 ## 🚀 Features
 
 - **Offline Video Library**: Manage and watch downloaded YouTube videos without an active internet connection.
-- **yt-dlp Downloader Integration**: Download videos with metadata, thumbnails, chapters, and top comments via `yt-dlp`.
+- **Creators & Channels Page**: Dedicated Creators hub to explore content creators in your offline library, view creator profiles, custom cover banners, avatars, channel handles (`@handle`), and creator-specific videos & playlists.
+- **App-Wide Creator Navigation**: Clickable channel names across the video player, search results, watch history, and playlists for seamless navigation to creator profile pages.
+- **yt-dlp Downloader Integration**: Download videos with metadata, thumbnails, channel handles/urls, chapters, and top comments via `yt-dlp`.
 - **Custom Interactive Player**: Feature-rich local player supporting timeline markers, custom notes, and chapter navigation.
 - **Timestamped Notes & Comments**: Add personal notes pinned to specific timestamps for study, research, or content creation.
 - **Collections & Playlists**: Organize your local video library into custom playlists and collections.
-- **Local Search & History**: Fast full-text search across titles, descriptions, and comments, along with watch history tracking.
+- **Local Search & History**: Fast SQLite-emulated FTS5 full-text search across titles, channel names, descriptions, and comments, along with watch history tracking.
 - **Modern UI**: YouTube-inspired dark-themed interface built with Tailwind CSS and Lucide icons.
 
 ---
@@ -21,7 +23,7 @@ A privacy-focused, offline-first YouTube video manager, downloader, and interact
 - **Frontend**: React 18, Vite, Tailwind CSS, Lucide Icons
 - **Backend Server**: Node.js, Express.js (Media static server & downloader process orchestrator)
 - **Downloader Engine**: `yt-dlp` CLI (Python)
-- **Data Persistence**: Browser Local Storage / IndexedDB for local library state; local file system for media storage
+- **Data Persistence**: Browser Local Storage / SQLite FTS5 emulation for local library state; local file system for media storage
 
 ---
 
@@ -98,7 +100,9 @@ LocalTube/
     ├── App.jsx           # Main Application UI component
     ├── main.jsx          # React app entry point
     ├── index.css         # Global CSS stylesheet & Tailwind directives
-    ├── components/       # React UI components (Player, Modals, Navbar, etc.)
+    ├── components/       # React UI components (Player, CreatorsView, Modals, Navbar, etc.)
+    │   ├── CreatorsView.jsx # Dedicated Creators Hub & Channel Profile view
+    │   └── ...
     └── services/         # Client database and downloader service modules
 ```
 

@@ -60,3 +60,34 @@
 .animate-popover {
   animation: fadeInScale 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* Holographic Shimmer Sweep Animation for Playlist Card */
+@keyframes shimmerSweep {
+  0% {
+    transform: translateX(-120%) rotate(15deg);
+  }
+  100% {
+    transform: translateX(250%) rotate(15deg);
+  }
+}
+
+.shimmer-line {
+  position: absolute;
+  top: -60%;
+  bottom: -60%;
+  width: 50%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(239, 68, 68, 0.15) 25%,
+    rgba(251, 191, 36, 0.45) 50%,
+    rgba(239, 68, 68, 0.15) 75%,
+    transparent 100%
+  );
+  transform: translateX(-120%) rotate(15deg);
+  pointer-events: none;
+}
+
+.group:hover .shimmer-line {
+  animation: shimmerSweep 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}

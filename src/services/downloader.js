@@ -30,19 +30,25 @@ export class YtDlpDownloaderService {
   }
 
   // Start background download task with real Express backend API + fallback simulation
-  async downloadVideo(url, customTitle = '') {
-    const videoId = this.extractYouTubeId(url) || `custom_${Date.now()}`;
+  async downloadVideo(rawUrl, customTitle = '') {
+    let targetUrl = (rawUrl || '').trim();
+    if (targetUrl && !/^https?:\/\//i.test(targetUrl)) {
+      targetUrl = 'https://' + targetUrl;
+    }
+
+    const videoId = this.extractYouTubeId(targetUrl) || `custom_${Date.now()}`;
     const taskId = `dl_${Date.now()}`;
 
     const downloadTask = {
       id: taskId,
       videoId,
-      url,
+      url: targetUrl,
       title: customTitle || `YouTube Video (${videoId})`,
-      progress: 5,
+      progress: 0,
       speed: 'Connecting...',
-      eta: 'Executing yt-dlp...',
+      eta: 'Initializing yt-dlp...',
       status: 'downloading',
+      logs: ['[Init] Connecting to local backend engine...'],
       startedAt: new Date().toISOString()
     };
 
@@ -53,41 +59,98 @@ export class YtDlpDownloaderService {
       const settings = db.getSettings();
 
       // Call local Express server backend with dynamic settings
-      const response = await fetch('http://localhost:3001/api/download', {
+      const response = await fetch('http://127.0.0.1:3001/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, taskId, settings })
+        body: JSON.stringify({ url: targetUrl, taskId, settings })
       });
 
-      if (response.ok) {
-        const data = await response.json();
+      if (response.ok && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        if (data.alreadyDownloaded) {
-          downloadTask.progress = 100;
-          downloadTask.status = 'completed';
-          downloadTask.speed = 'Already in library';
-          downloadTask.eta = data.message;
-          this.activeDownloads.set(taskId, downloadTask);
-          this.notify();
-          return taskId;
-        }
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        if (data.success && data.video) {
-          const video = data.video;
-          if (customTitle) video.title = customTitle;
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split('\n\n');
+          buffer = blocks.pop() || '';
 
-          db.insertVideo(video);
-          if (video.comments && video.comments.length > 0) {
-            video.comments.forEach(c => db.insertComment({ ...c, video_id: video.id }));
+          for (const block of blocks) {
+            const trimmed = block.trim();
+            if (trimmed.startsWith('data: ')) {
+              try {
+                const event = JSON.parse(trimmed.slice(6));
+                
+                if (event.type === 'progress') {
+                  downloadTask.progress = event.progress;
+                  downloadTask.speed = event.speed || 'Downloading';
+                  downloadTask.eta = event.eta ? `ETA ${event.eta}` : 'Downloading...';
+                  if (event.log) {
+                    downloadTask.logs.push(event.log);
+                    if (downloadTask.logs.length > 30) downloadTask.logs.shift();
+                  }
+                  this.activeDownloads.set(taskId, downloadTask);
+                  this.notify();
+
+                } else if (event.type === 'log') {
+                  if (event.log) {
+                    downloadTask.logs.push(event.log);
+                    if (downloadTask.logs.length > 30) downloadTask.logs.shift();
+                    if (!event.log.startsWith('[download]')) {
+                      downloadTask.eta = event.log.slice(0, 45);
+                    }
+                  }
+                  this.activeDownloads.set(taskId, downloadTask);
+                  this.notify();
+
+                } else if (event.type === 'alreadyDownloaded') {
+                  if (event.video) {
+                    db.insertVideo(event.video);
+                  }
+                  downloadTask.progress = 100;
+                  downloadTask.status = 'completed';
+                  downloadTask.speed = 'Already in library';
+                  downloadTask.eta = event.message;
+                  this.activeDownloads.set(taskId, downloadTask);
+                  this.notify();
+                  return taskId;
+
+                } else if (event.type === 'complete') {
+                  const video = event.video;
+                  if (customTitle) video.title = customTitle;
+
+                  db.insertVideo(video);
+                  if (video.comments && video.comments.length > 0) {
+                    video.comments.forEach(c => db.insertComment({ ...c, video_id: video.id }));
+                  }
+
+                  downloadTask.title = video.title;
+                  downloadTask.progress = 100;
+                  downloadTask.status = 'completed';
+                  downloadTask.speed = 'Done';
+                  downloadTask.eta = 'Saved to Downloads';
+                  this.activeDownloads.set(taskId, downloadTask);
+                  this.notify();
+                  return taskId;
+
+                } else if (event.type === 'error') {
+                  downloadTask.status = 'error';
+                  downloadTask.eta = event.error || 'Download failed';
+                  if (event.details) downloadTask.logs.push(event.details);
+                  this.activeDownloads.set(taskId, downloadTask);
+                  this.notify();
+                  return taskId;
+                }
+              } catch (err) {
+                console.error('[Downloader] SSE JSON parse error:', err);
+              }
+            }
           }
-
-          downloadTask.progress = 100;
-          downloadTask.status = 'completed';
-          downloadTask.eta = 'Done (Saved to ~/Videos/LocalTubeDownloads)';
-          this.activeDownloads.set(taskId, downloadTask);
-          this.notify();
-          return taskId;
         }
+        return taskId;
       }
     } catch (err) {
       console.warn('[Downloader] Local Express backend server not reachable at :3001, switching to simulated ingestion mode:', err);
@@ -109,7 +172,7 @@ export class YtDlpDownloaderService {
         this.notify();
 
         setTimeout(() => {
-          this.ingestDownloadedAsset(videoId, url, customTitle);
+          this.ingestDownloadedAsset(videoId, targetUrl, customTitle);
           downloadTask.status = 'completed';
           downloadTask.eta = 'Done';
           this.activeDownloads.set(taskId, downloadTask);
@@ -181,7 +244,7 @@ export class YtDlpDownloaderService {
   async cancelDownload(taskId) {
     if (this.activeDownloads.has(taskId)) {
       try {
-        await fetch('http://localhost:3001/api/cancel', {
+        await fetch('http://127.0.0.1:3001/api/cancel', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ taskId })

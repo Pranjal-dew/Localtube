@@ -12,9 +12,18 @@ app.use(cors());
 app.use(express.json());
 
 // Downloads Storage Directory
-const DOWNLOAD_DIR = path.join(os.homedir(), 'Videos', 'LocalTubeDownloads');
-if (!fs.existsSync(DOWNLOAD_DIR)) {
-  fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+let DOWNLOAD_DIR = path.join(process.cwd(), 'downloads');
+try {
+  const userVideosDir = path.join(os.homedir(), 'Videos', 'LocalTubeDownloads');
+  if (!fs.existsSync(userVideosDir)) {
+    fs.mkdirSync(userVideosDir, { recursive: true });
+  }
+  DOWNLOAD_DIR = userVideosDir;
+} catch (err) {
+  console.warn('[Server] Falling back to project downloads directory:', err.message);
+  if (!fs.existsSync(DOWNLOAD_DIR)) {
+    fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+  }
 }
 
 // Serve local video files & thumbnails to frontend
@@ -41,6 +50,17 @@ app.get('/api/health', (req, res) => {
 // Map to track active yt-dlp child processes for cancellation
 const activeProcesses = new Map();
 
+// Helper to extract YouTube channel handle (@handle)
+function extractYoutubeHandle(meta) {
+  if (!meta) return '';
+  if (meta.uploader_id && meta.uploader_id.startsWith('@')) return meta.uploader_id;
+  const url = meta.uploader_url || meta.channel_url || meta.webpage_url || '';
+  const match = url.match(/@([\w.-]+)/);
+  if (match) return `@${match[1]}`;
+  if (meta.uploader_id) return meta.uploader_id.startsWith('@') ? meta.uploader_id : `@${meta.uploader_id}`;
+  return meta.uploader ? `@${meta.uploader.replace(/[^a-z0-9]/gi, '')}` : '';
+}
+
 // Helper to extract YouTube video ID from URL
 function parseYouTubeId(url) {
   if (!url) return null;
@@ -49,12 +69,45 @@ function parseYouTubeId(url) {
   return (match && match[2].length === 11) ? match[2] : null;
 }
 
+// Helper to parse yt-dlp download progress lines
+function parseYtDlpProgress(line) {
+  if (!line) return null;
+  const dlMatch = line.match(/\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+([~\d\.\w]+)\s+at\s+([\d\.\w/]+(?:\/s)?)\s+ETA\s+([\d:]+)/i);
+  if (dlMatch) {
+    return {
+      progress: Math.min(99, parseFloat(dlMatch[1])),
+      totalSize: dlMatch[2],
+      speed: dlMatch[3],
+      eta: dlMatch[4]
+    };
+  }
+  const dl100Match = line.match(/\[download\]\s+100%\s+of\s+([~\d\.\w]+)/i);
+  if (dl100Match) {
+    return {
+      progress: 99,
+      totalSize: dl100Match[1],
+      speed: 'Finalizing',
+      eta: '00:00'
+    };
+  }
+  return null;
+}
+
 // Download Endpoint - Executes yt-dlp CLI with cancellation & duplicate detection
 app.post('/api/download', (req, res) => {
   const { url, taskId, settings } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'YouTube URL is required' });
   }
+
+  // Setup Server-Sent Events (SSE) Real-Time Progress Stream
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const sendEvent = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
 
   // Dynamic Settings with defaults
   const maxTopComments = settings?.maxTopComments ?? 100;
@@ -72,16 +125,46 @@ app.post('/api/download', (req, res) => {
       if (fs.statSync(folderPath).isDirectory()) {
         const files = fs.readdirSync(folderPath);
         const infoFile = files.find(f => f.endsWith('.info.json'));
-        if (infoFile) {
+        const videoFile = files.find(f => f.endsWith('.mp4') || f.endsWith('.mkv') || f.endsWith('.webm'));
+        const thumbFile = files.find(f => f.endsWith('.jpg') || f.endsWith('.png') || f.endsWith('.webp'));
+        if (infoFile && videoFile) {
           try {
             const rawJson = fs.readFileSync(path.join(folderPath, infoFile), 'utf-8');
             const meta = JSON.parse(rawJson);
             if (meta.id === ytId) {
               console.log(`[yt-dlp] Duplicate video detected: ${meta.title} (${ytId})`);
-              return res.json({
-                alreadyDownloaded: true,
+              const videoUrlPath = `http://127.0.0.1:3001/media/${folder}/${encodeURIComponent(videoFile)}`;
+              const thumbUrlPath = thumbFile ? `http://127.0.0.1:3001/media/${folder}/${encodeURIComponent(thumbFile)}` : '';
+              const chapters = (meta.chapters || []).map(ch => ({
+                title: ch.title,
+                start_time: Math.floor(ch.start_time),
+                end_time: Math.floor(ch.end_time)
+              }));
+              const uploaderHandle = extractYoutubeHandle(meta);
+              const uploaderUrl = meta.uploader_url || meta.channel_url || (uploaderHandle ? `https://www.youtube.com/${uploaderHandle}` : '');
+              const uploaderAvatar = meta.uploader_avatar || meta.channel_avatar || (uploaderHandle ? `https://unavatar.io/youtube/${uploaderHandle}` : '');
+
+              const videoRecord = {
+                id: meta.id || ytId,
+                title: meta.title || 'Downloaded Video',
+                channel_name: meta.uploader || meta.channel || 'YouTube Channel',
+                uploader_url: uploaderUrl,
+                uploader_id: uploaderHandle,
+                uploader_avatar: uploaderAvatar,
+                channel_url: uploaderUrl,
+                duration_sec: Math.floor(meta.duration || 0),
+                file_path: videoUrlPath,
+                thumbnail_path: thumbUrlPath,
+                chapters: chapters.length > 0 ? chapters : [
+                  { title: "Beginning", start_time: 0, end_time: Math.floor(meta.duration || 100) }
+                ]
+              };
+              sendEvent({
+                type: 'alreadyDownloaded',
+                video: videoRecord,
                 message: `This video (${meta.title}) is already downloaded in your local library!`
               });
+              return res.end();
             }
           } catch (e) {
             // continue checking
@@ -97,7 +180,6 @@ app.post('/api/download', (req, res) => {
   fs.mkdirSync(targetFolder, { recursive: true });
 
   const outputTemplate = path.join(targetFolder, '%(title)s.%(ext)s');
-
   const cookiesBrowser = settings?.cookiesFromBrowser;
 
   const args = [
@@ -108,6 +190,7 @@ app.post('/api/download', (req, res) => {
     '--convert-thumbnails', 'jpg',
     '--write-info-json',
     '--write-comments',
+    '--extractor-args', `youtube:player_client=android,web;max-comments=${maxTopComments},${maxTopComments},${maxSubComments},${maxNestedSubComments};comment_sort=top`,
     '--output', outputTemplate
   ];
 
@@ -118,6 +201,7 @@ app.post('/api/download', (req, res) => {
   args.push(url);
 
   console.log(`[yt-dlp] Launching download task ${taskId || videoId} for URL: ${url}`);
+  sendEvent({ type: 'log', log: `Launching yt-dlp engine for ${url}` });
 
   const nodeEnvPath = `${process.env.PATH || ''}:${path.dirname(process.execPath)}`;
   const child = spawn('yt-dlp', args, { env: { ...process.env, PATH: nodeEnvPath } });
@@ -127,14 +211,44 @@ app.post('/api/download', (req, res) => {
 
   let errorOutput = '';
 
+  const processOutputLine = (rawChunk) => {
+    const lines = rawChunk.toString().split(/[\r\n]+/);
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      console.log(`[yt-dlp] ${trimmed}`);
+
+      const parsed = parseYtDlpProgress(trimmed);
+      if (parsed) {
+        sendEvent({
+          type: 'progress',
+          progress: parsed.progress,
+          speed: parsed.speed,
+          eta: parsed.eta,
+          log: trimmed
+        });
+      } else {
+        sendEvent({
+          type: 'log',
+          log: trimmed
+        });
+      }
+    });
+  };
+
+  child.stdout.on('data', processOutputLine);
   child.stderr.on('data', (data) => {
     errorOutput += data.toString();
+    processOutputLine(data);
   });
 
   child.on('close', (code) => {
     if (code !== 0) {
       console.error(`[yt-dlp] Execution failed with code ${code}: ${errorOutput}`);
-      return res.status(500).json({ error: 'yt-dlp download failed', details: errorOutput });
+      sendEvent({ type: 'error', error: 'yt-dlp download failed', details: errorOutput });
+      if (taskId) activeProcesses.delete(taskId);
+      return res.end();
     }
 
     try {
@@ -269,13 +383,21 @@ app.post('/api/download', (req, res) => {
         });
       });
 
-      const videoUrlPath = videoFile ? `http://localhost:3001/media/${videoId}/${encodeURIComponent(videoFile)}` : '';
-      const thumbUrlPath = thumbFile ? `http://localhost:3001/media/${videoId}/${encodeURIComponent(thumbFile)}` : '';
+      const videoUrlPath = videoFile ? `http://127.0.0.1:3001/media/${videoId}/${encodeURIComponent(videoFile)}` : '';
+      const thumbUrlPath = thumbFile ? `http://127.0.0.1:3001/media/${videoId}/${encodeURIComponent(thumbFile)}` : '';
+
+      const uploaderHandle = extractYoutubeHandle(metadata);
+      const uploaderUrl = metadata.uploader_url || metadata.channel_url || (uploaderHandle ? `https://www.youtube.com/${uploaderHandle}` : '');
+      const uploaderAvatar = metadata.uploader_avatar || metadata.channel_avatar || (uploaderHandle ? `https://unavatar.io/youtube/${uploaderHandle}` : '');
 
       const videoRecord = {
         id: metadata.id || videoId,
         title: metadata.title || 'Downloaded Video',
         channel_name: metadata.uploader || metadata.channel || 'YouTube Channel',
+        uploader_url: uploaderUrl,
+        uploader_id: uploaderHandle,
+        uploader_avatar: uploaderAvatar,
+        channel_url: uploaderUrl,
         duration_sec: Math.floor(metadata.duration || 0),
         file_path: videoUrlPath,
         thumbnail_path: thumbUrlPath,
@@ -286,13 +408,15 @@ app.post('/api/download', (req, res) => {
       };
 
       console.log(`[yt-dlp] Successfully ingested: ${videoRecord.title}`);
+      sendEvent({ type: 'complete', video: videoRecord });
       if (taskId) activeProcesses.delete(taskId);
-      res.json({ success: true, video: videoRecord });
+      res.end();
 
     } catch (err) {
       console.error('[yt-dlp] Ingestion parsing error:', err);
+      sendEvent({ type: 'error', error: 'Failed to parse downloaded metadata', details: err.message });
       if (taskId) activeProcesses.delete(taskId);
-      res.status(500).json({ error: 'Failed to parse downloaded metadata', details: err.message });
+      res.end();
     }
   });
 });
@@ -477,7 +601,7 @@ app.post('/api/cancel', (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`[LocalTube Backend] Express server running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[LocalTube Backend] Express server running on http://127.0.0.1:${PORT}`);
   console.log(`[LocalTube Media] Videos saved to: ${DOWNLOAD_DIR}`);
 });

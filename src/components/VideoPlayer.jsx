@@ -4,7 +4,7 @@ import TimelineMarkers from './TimelineMarkers';
 import ChaptersList from './ChaptersList';
 import { db } from '../services/db';
 
-export default function VideoPlayer({ video, comments, onAddQuickNote }) {
+export default function VideoPlayer({ video, comments, onAddQuickNote, onSelectCreator }) {
   const videoRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -280,7 +280,13 @@ export default function VideoPlayer({ video, comments, onAddQuickNote }) {
         <h1 className="text-lg font-bold text-white tracking-tight">{video.title}</h1>
         <div className="flex items-center justify-between text-xs text-gray-400">
           <div className="flex items-center space-x-2">
-            <span className="font-semibold text-gray-300">{video.channel_name}</span>
+            <button
+              onClick={() => onSelectCreator && onSelectCreator(video.channel_name)}
+              className="font-semibold text-gray-300 hover:text-red-400 transition-colors flex items-center space-x-1 font-sans cursor-pointer group"
+              title={`View ${video.channel_name}'s creator profile`}
+            >
+              <span className="underline decoration-dotted underline-offset-2 group-hover:decoration-red-400">{video.channel_name}</span>
+            </button>
             <span>•</span>
             <span>Downloaded Offline</span>
           </div>

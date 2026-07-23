@@ -115,7 +115,7 @@ export default function VideoManagerView({ videos, onRefresh, onSelectVideo, onO
             className="bg-red-600 hover:bg-red-700 text-white text-xs px-4 py-2 rounded-xl flex items-center space-x-1.5 font-semibold shadow-md shadow-red-600/20 active:scale-95 transition-all"
           >
             <Youtube className="w-4 h-4" />
-            <span>Download YouTube URL</span>
+            <span>Add</span>
           </button>
         </div>
       </div>
@@ -130,7 +130,7 @@ export default function VideoManagerView({ videos, onRefresh, onSelectVideo, onO
               onClick={() => setIsCreateOpen(true)}
               className="text-xs text-red-400 hover:underline font-semibold"
             >
-              Add your first video manually or paste a YouTube URL.
+              Add your first video manually or add a YouTube URL.
             </button>
           </div>
         ) : (

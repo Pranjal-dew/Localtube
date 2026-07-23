@@ -4,7 +4,6 @@ import { downloader } from '../services/downloader';
 
 export default function DownloadModal({ isOpen, onClose, onVideoImported }) {
   const [url, setUrl] = useState('');
-  const [customTitle, setCustomTitle] = useState('');
   const [queue, setQueue] = useState([]);
   const [showCliPreview, setShowCliPreview] = useState(false);
 
@@ -24,9 +23,8 @@ export default function DownloadModal({ isOpen, onClose, onVideoImported }) {
     e.preventDefault();
     if (!url.trim()) return;
 
-    downloader.downloadVideo(url.trim(), customTitle.trim());
+    downloader.downloadVideo(url.trim());
     setUrl('');
-    setCustomTitle('');
   };
 
   return (
@@ -57,25 +55,12 @@ export default function DownloadModal({ isOpen, onClose, onVideoImported }) {
                 YouTube Video or Playlist URL
               </label>
               <input
-                type="url"
+                type="text"
                 required
-                placeholder="https://www.youtube.com/watch?v=..."
+                placeholder="https://youtu.be/... or https://www.youtube.com/watch?v=..."
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 className="w-full bg-[#121212] text-white placeholder-gray-500 border border-[#3f3f3f] focus:border-red-500 rounded-xl p-3 text-xs focus:outline-none transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-300 mb-1">
-                Custom Title (Optional)
-              </label>
-              <input
-                type="text"
-                placeholder="Override default video title..."
-                value={customTitle}
-                onChange={(e) => setCustomTitle(e.target.value)}
-                className="w-full bg-[#121212] text-white placeholder-gray-500 border border-[#3f3f3f] focus:border-red-500 rounded-xl p-2.5 text-xs focus:outline-none transition-colors"
               />
             </div>
 
@@ -125,21 +110,23 @@ export default function DownloadModal({ isOpen, onClose, onVideoImported }) {
                 </button>
               </div>
 
-              <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+              <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
                 {queue.map((task) => (
                   <div 
                     key={task.id} 
-                    className="bg-[#121212] p-3 rounded-xl border border-[#272727] space-y-1.5"
+                    className="bg-[#121212] p-3 rounded-xl border border-[#272727] space-y-2"
                   >
                     <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold text-white truncate max-w-[240px]">
+                      <span className="font-semibold text-white truncate max-w-[260px]">
                         {task.title}
                       </span>
                       <div className="flex items-center space-x-2">
-                        <span className="text-[10px] font-mono text-gray-400">
-                          {task.status === 'downloading' && `${task.progress}% (${task.speed})`}
-                          {task.status === 'parsing' && 'Ingesting JSON...'}
-                          {task.status === 'completed' && <span className="text-emerald-400 font-bold">Done</span>}
+                        <span className="text-[11px] font-mono font-bold text-gray-300">
+                          {task.status === 'completed' && <span className="text-emerald-400">✅ Done</span>}
+                          {task.status === 'error' && <span className="text-red-400">❌ Error</span>}
+                          {task.status === 'downloading' && (
+                            <span className="text-red-400">{Math.round(task.progress || 0)}%</span>
+                          )}
                         </span>
                         {task.status === 'downloading' && (
                           <button
@@ -153,15 +140,46 @@ export default function DownloadModal({ isOpen, onClose, onVideoImported }) {
                       </div>
                     </div>
 
+                    {/* Live Speed & ETA Indicators */}
+                    {task.status === 'downloading' && (
+                      <div className="flex items-center justify-between text-[11px] font-mono text-gray-400 bg-black/40 px-2.5 py-1 rounded-lg border border-[#222]">
+                        <span className="truncate max-w-[240px] text-gray-300">
+                          {task.eta || 'Processing...'}
+                        </span>
+                        {task.speed && task.speed !== 'Connecting...' && (
+                          <span className="text-emerald-400 font-semibold shrink-0 ml-2">
+                            ⚡ {task.speed}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {/* Progress Bar */}
-                    <div className="w-full bg-[#272727] h-1.5 rounded-full overflow-hidden">
+                    <div className="w-full bg-[#272727] h-2 rounded-full overflow-hidden">
                       <div 
                         className={`h-full transition-all duration-300 ${
-                          task.status === 'completed' ? 'bg-emerald-500' : 'bg-red-600'
+                          task.status === 'completed' ? 'bg-emerald-500' : task.status === 'error' ? 'bg-red-500' : 'bg-gradient-to-r from-red-600 to-amber-500 animate-pulse'
                         }`}
-                        style={{ width: `${task.progress}%` }}
+                        style={{ width: `${Math.max(2, Math.min(100, task.progress || 0))}%` }}
                       />
                     </div>
+
+                    {/* Live Debugging Logs Terminal Stream */}
+                    {task.logs && task.logs.length > 0 && (
+                      <details className="text-[10px] font-mono bg-black/80 p-2 rounded-lg border border-[#272727] text-gray-400 space-y-0.5">
+                        <summary className="cursor-pointer text-gray-400 hover:text-gray-200 select-none flex items-center justify-between">
+                          <span>yt-dlp Live Stream ({task.logs.length} lines)</span>
+                          <span className="text-gray-500 text-[9px]">Click to inspect</span>
+                        </summary>
+                        <div className="max-h-24 overflow-y-auto space-y-0.5 pt-1.5 border-t border-[#222]">
+                          {task.logs.slice(-10).map((logLine, idx) => (
+                            <div key={idx} className="truncate text-gray-300 hover:text-white">
+                              {logLine}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                   </div>
                 ))}
               </div>

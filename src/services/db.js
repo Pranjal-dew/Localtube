@@ -9,7 +9,9 @@ const STORAGE_KEYS = {
   COLLECTIONS: 'localtube_collections_v1',
   COLLECTION_ITEMS: 'localtube_collection_items_v1',
   SEARCH_INDEX: 'localtube_search_index_v1',
-  SETTINGS: 'localtube_settings_v1'
+  SETTINGS: 'localtube_settings_v1',
+  SUBSCRIBED_CREATORS: 'localtube_subscribed_creators_v1',
+  CREATOR_PROFILES: 'localtube_creator_profiles_v1'
 };
 
 const DEFAULT_SETTINGS = {
@@ -35,6 +37,7 @@ const DEFAULT_VIDEOS = [
     last_position_sec: 145,
     completion_percent: 24.3,
     last_watched_at: new Date(Date.now() - 3600000).toISOString(),
+    last_comments_synced_at: new Date(Date.now() - 3600000 * 4).toISOString(),
     created_at: new Date(Date.now() - 86400000 * 2).toISOString(),
     chapters: [
       { title: "Intro & Sunrise", start_time: 0, end_time: 45 },
@@ -218,6 +221,8 @@ const DEFAULT_COLLECTION_ITEMS = [
   { collection_id: 2, video_id: "L_LUpnjgPso", item_order: 1 }
 ];
 
+const DEFAULT_CREATOR_PROFILES = {};
+
 class LocalTubeDatabase {
   constructor() {
     this.initDatabase();
@@ -238,6 +243,9 @@ class LocalTubeDatabase {
     }
     if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+    }
+    if (!localStorage.getItem(STORAGE_KEYS.CREATOR_PROFILES)) {
+      localStorage.setItem(STORAGE_KEYS.CREATOR_PROFILES, JSON.stringify(DEFAULT_CREATOR_PROFILES));
     }
     this.rebuildFTSIndex();
   }
@@ -312,6 +320,21 @@ class LocalTubeDatabase {
       });
     }
     localStorage.setItem(STORAGE_KEYS.VIDEOS, JSON.stringify(videos));
+
+    // Auto populate/update Creator Profile with YouTube Channel Link and Avatar
+    if (videoData.channel_name) {
+      const channelName = videoData.channel_name.trim();
+      const channelUrl = videoData.uploader_url || videoData.channel_url || (videoData.uploader_id ? `https://www.youtube.com/${videoData.uploader_id.startsWith('@') ? videoData.uploader_id : '@' + videoData.uploader_id}` : '');
+      const channelAvatar = videoData.uploader_avatar || videoData.channel_avatar || (videoData.uploader_id ? `https://unavatar.io/youtube/${videoData.uploader_id}` : '');
+
+      const currentProfile = this.getCreatorProfile(channelName);
+      this.updateCreatorProfile(channelName, {
+        youtube_url: currentProfile.youtube_url || channelUrl,
+        avatar_url: currentProfile.avatar_url || channelAvatar,
+        banner_url: currentProfile.banner_url || `https://picsum.photos/seed/${encodeURIComponent(channelName)}/1600/400`
+      });
+    }
+
     this.rebuildFTSIndex();
     return videoData;
   }
@@ -357,14 +380,15 @@ class LocalTubeDatabase {
   // Comments & Notes (Dual-Layer)
   getComments(videoId = null) {
     const comments = JSON.parse(localStorage.getItem(STORAGE_KEYS.COMMENTS) || '[]');
+    const active = comments.filter(c => !c.deleted_at);
     if (videoId) {
-      return comments.filter(c => c.video_id === videoId).sort((a, b) => (a.timestamp_sec || 0) - (b.timestamp_sec || 0));
+      return active.filter(c => c.video_id === videoId).sort((a, b) => (a.timestamp_sec || 0) - (b.timestamp_sec || 0));
     }
-    return comments;
+    return active;
   }
 
   insertComment(commentData) {
-    const comments = this.getComments();
+    const comments = JSON.parse(localStorage.getItem(STORAGE_KEYS.COMMENTS) || '[]');
     const newComment = {
       id: Date.now(),
       created_at: new Date().toISOString(),
@@ -377,8 +401,49 @@ class LocalTubeDatabase {
   }
 
   deleteComment(commentId) {
-    let comments = this.getComments();
+    let comments = JSON.parse(localStorage.getItem(STORAGE_KEYS.COMMENTS) || '[]');
+    const index = comments.findIndex(c => c.id === commentId);
+    if (index >= 0) {
+      if (comments[index].is_local === 1) {
+        comments[index].deleted_at = new Date().toISOString();
+      } else {
+        comments.splice(index, 1);
+      }
+      localStorage.setItem(STORAGE_KEYS.COMMENTS, JSON.stringify(comments));
+      this.rebuildFTSIndex();
+    }
+  }
+
+  getDeletedNotes() {
+    const comments = JSON.parse(localStorage.getItem(STORAGE_KEYS.COMMENTS) || '[]');
+    const videos = this.getVideos();
+    const deleted = comments.filter(c => c.is_local === 1 && c.deleted_at);
+    return deleted.map(c => ({
+      ...c,
+      video: videos.find(v => v.id === c.video_id) || null
+    })).sort((a, b) => new Date(b.deleted_at) - new Date(a.deleted_at));
+  }
+
+  restoreComment(commentId) {
+    let comments = JSON.parse(localStorage.getItem(STORAGE_KEYS.COMMENTS) || '[]');
+    const index = comments.findIndex(c => c.id === commentId);
+    if (index >= 0) {
+      delete comments[index].deleted_at;
+      localStorage.setItem(STORAGE_KEYS.COMMENTS, JSON.stringify(comments));
+      this.rebuildFTSIndex();
+    }
+  }
+
+  permanentlyDeleteComment(commentId) {
+    let comments = JSON.parse(localStorage.getItem(STORAGE_KEYS.COMMENTS) || '[]');
     comments = comments.filter(c => c.id !== commentId);
+    localStorage.setItem(STORAGE_KEYS.COMMENTS, JSON.stringify(comments));
+    this.rebuildFTSIndex();
+  }
+
+  emptyDeletedNotesBin() {
+    let comments = JSON.parse(localStorage.getItem(STORAGE_KEYS.COMMENTS) || '[]');
+    comments = comments.filter(c => !(c.is_local === 1 && c.deleted_at));
     localStorage.setItem(STORAGE_KEYS.COMMENTS, JSON.stringify(comments));
     this.rebuildFTSIndex();
   }
@@ -389,6 +454,10 @@ class LocalTubeDatabase {
     comments = comments.filter(c => c.video_id !== videoId || c.is_local === 1);
     comments.push(...newPublicComments);
     localStorage.setItem(STORAGE_KEYS.COMMENTS, JSON.stringify(comments));
+
+    // Record last comments sync timestamp on video object
+    this.updateVideo(videoId, { last_comments_synced_at: new Date().toISOString() });
+
     this.rebuildFTSIndex();
     return newPublicComments;
   }
@@ -478,6 +547,125 @@ class LocalTubeDatabase {
         video
       };
     }).filter(item => item.video);
+  }
+
+  // Creators Management Methods
+  getSubscribedCreators() {
+    return JSON.parse(localStorage.getItem(STORAGE_KEYS.SUBSCRIBED_CREATORS) || '[]');
+  }
+
+  isSubscribedCreator(channelName) {
+    if (!channelName) return false;
+    const subs = this.getSubscribedCreators();
+    return subs.includes(channelName.trim());
+  }
+
+  toggleSubscribeCreator(channelName) {
+    if (!channelName) return false;
+    const name = channelName.trim();
+    let subs = this.getSubscribedCreators();
+    let isSubbed = false;
+    if (subs.includes(name)) {
+      subs = subs.filter(s => s !== name);
+      isSubbed = false;
+    } else {
+      subs.push(name);
+      isSubbed = true;
+    }
+    localStorage.setItem(STORAGE_KEYS.SUBSCRIBED_CREATORS, JSON.stringify(subs));
+    return isSubbed;
+  }
+
+  getCreatorProfiles() {
+    return JSON.parse(localStorage.getItem(STORAGE_KEYS.CREATOR_PROFILES) || '{}');
+  }
+
+  getCreatorProfile(channelName) {
+    if (!channelName) return {};
+    const name = channelName.trim();
+    const profiles = this.getCreatorProfiles();
+    if (profiles[name]) return profiles[name];
+
+    // Fall back to channel_avatar / channel_banner on video objects if available
+    const videos = this.getVideos().filter(v => (v.channel_name || '').trim().toLowerCase() === name.toLowerCase());
+    const videoWithAvatar = videos.find(v => v.channel_avatar || v.uploader_avatar);
+    const videoWithBanner = videos.find(v => v.channel_banner);
+    const videoWithUrl = videos.find(v => v.channel_url || v.uploader_url);
+    const videoWithHandle = videos.find(v => v.uploader_id);
+
+    return {
+      handle: videoWithHandle?.uploader_id ? (videoWithHandle.uploader_id.startsWith('@') ? videoWithHandle.uploader_id : `@${videoWithHandle.uploader_id}`) : '',
+      avatar_url: videoWithAvatar ? (videoWithAvatar.channel_avatar || videoWithAvatar.uploader_avatar) : '',
+      banner_url: videoWithBanner ? videoWithBanner.channel_banner : '',
+      youtube_url: videoWithUrl ? (videoWithUrl.channel_url || videoWithUrl.uploader_url) : ''
+    };
+  }
+
+  updateCreatorProfile(channelName, updatedData) {
+    if (!channelName) return;
+    const name = channelName.trim();
+    const profiles = this.getCreatorProfiles();
+    profiles[name] = {
+      ...(profiles[name] || {}),
+      ...updatedData
+    };
+    localStorage.setItem(STORAGE_KEYS.CREATOR_PROFILES, JSON.stringify(profiles));
+    return profiles[name];
+  }
+
+  getCreators() {
+    const videos = this.getVideos();
+    const subs = this.getSubscribedCreators();
+    const profiles = this.getCreatorProfiles();
+    const map = new Map();
+
+    videos.forEach(v => {
+      const name = (v.channel_name || 'Unknown Creator').trim();
+      if (!map.has(name)) {
+        const prof = profiles[name] || {};
+        map.set(name, {
+          name,
+          handle: prof.handle || (v.uploader_id ? (v.uploader_id.startsWith('@') ? v.uploader_id : `@${v.uploader_id}`) : ''),
+          isSubscribed: subs.includes(name),
+          avatar_url: prof.avatar_url || v.channel_avatar || v.uploader_avatar || '',
+          banner_url: prof.banner_url || v.channel_banner || '',
+          youtube_url: prof.youtube_url || v.channel_url || v.uploader_url || '',
+          videos: [],
+          latestVideo: v
+        });
+      }
+      const creator = map.get(name);
+      creator.videos.push(v);
+    });
+
+    return Array.from(map.values()).sort((a, b) => b.videos.length - a.videos.length);
+  }
+
+  getCreatorDetails(channelName) {
+    if (!channelName) return null;
+    const name = channelName.trim();
+    const videos = this.getVideos().filter(v => (v.channel_name || '').trim().toLowerCase() === name.toLowerCase());
+    const isSubscribed = this.isSubscribedCreator(name);
+    const profile = this.getCreatorProfile(name);
+    
+    // Find collections containing videos from this creator
+    const collections = this.getCollections();
+    const creatorVideoIds = new Set(videos.map(v => v.id));
+    const creatorCollections = collections.filter(col => {
+      const items = this.getCollectionItems(col.id);
+      return items.some(item => creatorVideoIds.has(item.video_id));
+    });
+
+    return {
+      name: videos.length > 0 ? videos[0].channel_name : name,
+      handle: profile.handle || (videos.find(v => v.uploader_id)?.uploader_id ? (videos.find(v => v.uploader_id).uploader_id.startsWith('@') ? videos.find(v => v.uploader_id).uploader_id : `@${videos.find(v => v.uploader_id).uploader_id}`) : ''),
+      isSubscribed,
+      avatar_url: profile.avatar_url || (videos.find(v => v.channel_avatar)?.channel_avatar) || '',
+      banner_url: profile.banner_url || (videos.find(v => v.channel_banner)?.channel_banner) || '',
+      youtube_url: profile.youtube_url || (videos.find(v => v.channel_url || v.uploader_url)?.uploader_url) || '',
+      videos,
+      collections: creatorCollections
+    };
   }
 }
 

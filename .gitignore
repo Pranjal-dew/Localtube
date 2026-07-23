@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build and Production Outputs
+dist/
+dist-ssr/
+build/
+*.local
+
+# Environment & Sensitive Files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+secrets/
+config.local.*
+
+# Video, Audio & Media Files
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.mov
+*.flv
+*.wmv
+*.m4v
+*.3gp
+*.mp3
+*.wav
+*.aac
+*.ogg
+*.flac
+*.m4a
+downloads/
+videos/
+media/
+storage/
+
+# Databases & Local Caches
+*.db
+*.sqlite
+*.sqlite3
+*.log
+.vite/
+.cache/
+
+# OS & Editor Files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
